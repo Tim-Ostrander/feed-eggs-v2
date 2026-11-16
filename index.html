@@ -150,16 +150,46 @@ function ensureAudio() {
   }
 }
 
+// Unlock speech + Web Audio inside the first real user gesture.
+// iOS/Safari silently drop speech and audio started from timers until this happens.
+let audioUnlocked = false;
+function unlockAudio() {
+  ensureAudio();
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  try {
+    if (audioCtx) {
+      const buf = audioCtx.createBuffer(1, 1, 22050);
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(audioCtx.destination);
+      src.start(0);
+    }
+  } catch (err) {}
+  try {
+    if ('speechSynthesis' in window) {
+      const primer = new SpeechSynthesisUtterance(' ');
+      primer.volume = 0;
+      window.speechSynthesis.speak(primer);
+    }
+  } catch (err) {}
+}
+['pointerdown', 'touchstart', 'touchend', 'mousedown', 'click', 'keydown'].forEach(evt => {
+  window.addEventListener(evt, unlockAudio, { capture: true, passive: true });
+});
+
 function speakLine(text) {
   if (!text) return;
   try {
     if (!('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
+    if (window.speechSynthesis.paused) window.speechSynthesis.resume();
     const utter = new SpeechSynthesisUtterance(text);
     utter.pitch = 0.4;
     utter.rate = 0.85;
     utter.volume = 1.0;
-    window.speechSynthesis.speak(utter);
+    // Small delay: speaking immediately after cancel() is dropped by some browsers
+    setTimeout(() => window.speechSynthesis.speak(utter), 60);
   } catch (err) {
     // Ignore speech synthesis errors on unsupported environments
   }
