@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FEED EGGS</title>
+<link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet">
+<style>
+  * {
+    box-sizing: border-box;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body {
+    margin: 0;
+    padding: 0;
+    background-color: #18181b;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Courier New', 'VT323', Courier, monospace;
+    overflow: hidden;
+  }
+  #aspect-container {
+    width: 100%;
+    max-width: 960px;
+    padding: 12px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+  #game-wrapper {
+    position: relative;
+    width: 960px;
+    height: 540px;
+    max-width: 100%;
+    aspect-ratio: 16 / 9;
+    border: 3px solid #000000;
+    background-color: #b8ccd8;
+    box-shadow: 8px 8px 0px #000000;
+    cursor: none;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  .mac-modal {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #b8ccd8;
+    border: 2px solid #000000;
+    min-width: 300px;
+    display: none;
+    z-index: 20;
+    box-shadow: none;
+  }
+  .mac-titlebar {
+    height: 20px;
+    background: repeating-linear-gradient(
+      to bottom,
+      #ffffff,
+      #ffffff 2px,
+      #000000 2px,
+      #000000 4px
+    );
+    border-bottom: 2px solid #000000;
+  }
+  .mac-body {
+    padding: 22px 30px;
+    text-align: center;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 22px;
+    font-weight: bold;
+    color: #000000;
+    line-height: 1.35;
+    letter-spacing: 0.5px;
+    -webkit-font-smoothing: none;
+  }
+  #yes-input {
+    margin-top: 14px;
+    width: 130px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 20px;
+    font-weight: bold;
+    text-align: center;
+    border: 2px solid #000000;
+    background: #b8ccd8;
+    color: #000000;
+    padding: 4px 6px;
+    outline: none;
+    text-transform: uppercase;
+    border-radius: 0;
+  }
+  .warning-icon-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 4px 12px;
+  }
+</style>
+</head>
+<body>
+
+<div id="aspect-container">
+  <div id="game-wrapper">
+    <canvas id="gameCanvas" width="960" height="540"></canvas>
+
+    <!-- Retro System 1 Modal Popup -->
+    <div id="modal-box" class="mac-modal">
+      <div class="mac-titlebar"></div>
+      <div id="modal-content" class="mac-body"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/**
+ * FEED EGGS - Complete Procedural 2D Game & State Machine (100% Screen-Accurate)
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const modalBox = document.getElementById('modal-box');
+const modalContent = document.getElementById('modal-content');
+
+const MONO_BG = '#b8ccd8';
+
+// =========================================
+// AUDIO & SPEECH SYNTHESIS ENGINE
+// =========================================
+let audioCtx = null;
+
+function ensureAudio() {
+  try {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+  } catch (err) {
+    // Fallback if audio context is blocked
+  }
+}
+
+function speakLine(text) {
+  if (!text) return;
+  try {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.pitch = 0.4;
+    utter.rate = 0.85;
+    utter.volume = 1.0;
+    window.speechSynthesis.speak(utter);
+  } catch (err) {
+    // Ignore speech synthesis errors on unsupported environments
+  }
+}
+
+let bassInterval = null;
+function startSlinkyBassline() {
+  ensureAudio();
+  if (!audioCtx || bassInterval) return;
+  // Sleazy 1970s funk/slinky bassline notes (E2, G2, A2, Bb2, A2, G2, D2, E2)
+  const notes = [82.41, 98.00, 110.00, 116.54, 110.00, 98.00, 73.42, 82.41];
+  let step = 0;
+  bassInterval = setInterval(() => {
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    const osc = audioCtx.createOscillator();
+    const filter = audioCtx.createBiquadFilter();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(notes[step % notes.length], now);
+
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(680, now);
+    filter.frequency.exponentialRampToValueAtTime(150, now + 0.22);
+
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.008, now + 0.24);
+
+    osc.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.25);
+    step++;
+  }, 260);
+}
+
+// =========================================
+// GAME STATE & CONSTANTS
+// =========================================
+const state = {
+  phase: 1, // 1: Undercount, 2: Out of eggs, 3: 40/41 Glitch, 4: Cutscene
+  bgColor: MONO_BG,
+  eggX: 190,
+  eggY: 355,
+  eggFace: 'OPEN', // 'OPEN', 'CHEWING', 'ALERT', 'NEUTRAL'
+  chewTimer: 0,
+  basketCountVisible: false,
+  basketCount: 80,
+  batchIndex: 0, // 0: 5 eggs->6, 1: 4 eggs->3, 2: 3 eggs->2, 3: next drag triggers Phase 2
+  batchFeeds: 0,
+  phase3Feeds: 0,
+  inputLocked: false,
+  draggingEgg: false,
+  dragX: 0,
+  dragY: 0,
+  frozenMidAirEgg: null,
+  mouseX: 480,
+  mouseY: 270,
+  mouseDown: false,
+  cutsceneStart: 0,
+  finalModalShown: false
+};
+
+const basketPos = { x: 780, y: 390 };
+
+// ~10 visible small monochrome oval eggs overlapping at slight angles
+const basketEggsOffsets = [
+  { dx: -38, dy: -16, rot: -0.22 },
+  { dx: -18, dy: -22, rot: 0.12 },
+  { dx: 4, dy: -20, rot: -0.10 },
+  { dx: 26, dy: -18, rot: 0.25 },
+  { dx: 42, dy: -12, rot: -0.15 },
+  { dx: -28, dy: -6, rot: 0.06 },
+  { dx: -6, dy: -8, rot: -0.18 },
+  { dx: 16, dy: -7, rot: 0.15 },
+  { dx: 34, dy: -4, rot: -0.05 },
+  { dx: 0, dy: -28, rot: 0.28 }
+];
+
+// =========================================
+// MODAL HELPERS
+// =========================================
+function showModal(htmlContent, topY = '50%') {
+  modalBox.style.top = topY;
+  modalContent.innerHTML = htmlContent;
+  modalBox.style.display = 'block';
+}
+
+function hideModal() {
+  modalBox.style.display = 'none';
+}
+
+function triggerTimedModal(text, spokenText, duration, onComplete) {
+  state.inputLocked = true;
+  showModal(text);
+  if (spokenText) {
+    speakLine(spokenText);
+  }
+  setTimeout(() => {
+    hideModal();
+    state.inputLocked = false;
+    if (onComplete) onComplete();
+  }, duration);
+}
+
+// =========================================
+// SCRIPTED PROGRESSION & STATE MACHINE
+// =========================================
+function triggerOutOfEggsSequence() {
+  state.phase = 2;
+  state.inputLocked = true;
+  state.draggingEgg = false;
+  // Freeze mid-air small egg to the right of the Big Egg (silent alert)
+  state.frozenMidAirEgg = { x: 350, y: 315 };
+  state.bgColor = '#00bce4';
+  state.eggFace = 'ALERT';
+
+  // Sharp pixel-style SVG warning triangle icon
+  const warningTriangleSVG = `
+    <div class="warning-icon-wrap">
+      <svg width="54" height="48" viewBox="0 0 54 48">
+        <polygon points="27,3 51,45 3,45" fill="#ff2a00" stroke="#000000" stroke-width="3" stroke-linejoin="miter"/>
+        <rect x="25" y="16" width="4" height="15" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+        <rect x="25" y="35" width="4" height="5" fill="#ffffff" stroke="#000000" stroke-width="1"/>
+      </svg>
+    </div>
+  `;
+  showModal(warningTriangleSVG);
+
+  setTimeout(() => {
+    state.bgColor = MONO_BG;
+    const promptHTML = `
+      <div>Dude, you ran out of eggs.<br>Would you like to buy<br>an 80 pack of eggs?</div>
+      <input type="text" id="yes-input" maxlength="5" autocomplete="off" spellcheck="false" />
+    `;
+    showModal(promptHTML);
+    speakLine("Dude, you ran out of eggs. Would you like to buy an 80 pack of eggs?");
+
+    const inputEl = document.getElementById('yes-input');
+    if (inputEl) {
+      inputEl.focus();
+      const keepFocus = () => {
+        if (state.phase === 2 && document.getElementById('yes-input')) {
+          document.getElementById('yes-input').focus();
+        }
+      };
+      window.addEventListener('mousedown', keepFocus, { once: true });
+
+      inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          if (inputEl.value.trim().toUpperCase() === 'YES') {
+            hideModal();
+            state.frozenMidAirEgg = null;
+            state.eggFace = 'OPEN';
+            state.basketCountVisible = true;
+            state.basketCount = 80;
+            state.phase = 3;
+            state.inputLocked = false;
+          } else {
+            inputEl.value = '';
+          }
+        }
+      });
+    }
+  }, 1250);
+}
+
+function handleMouthFeed() {
+  // Silent chewing animation (no arcade chomp sound)
+  state.eggFace = 'CHEWING';
+  state.chewTimer = performance.now() + 750;
+
+  if (state.phase === 1) {
+    state.batchFeeds++;
+    const batchTargets = [5, 4, 3];
+    if (state.batchFeeds >= batchTargets[state.batchIndex]) {
+      state.inputLocked = true;
+      setTimeout(() => {
+        state.eggFace = 'OPEN';
+        if (state.batchIndex === 0) {
+          // Batch 1: Speak "Six eggs."
+          triggerTimedModal('6 EGGS', 'Six eggs.', 2200, () => {
+            state.batchIndex = 1;
+            state.batchFeeds = 0;
+          });
+        } else if (state.batchIndex === 1) {
+          // Batch 2: Silent popup (no TTS)
+          triggerTimedModal('3 EGGS', null, 2000, () => {
+            state.batchIndex = 2;
+            state.batchFeeds = 0;
+          });
+        } else if (state.batchIndex === 2) {
+          // Batch 3: Silent popup (no TTS)
+          triggerTimedModal('2 EGGS', null, 2000, () => {
+            state.batchIndex = 3;
+            state.batchFeeds = 0;
+          });
+        }
+      }, 750);
+    }
+  } else if (state.phase === 3) {
+    state.phase3Feeds++;
+    state.inputLocked = true;
+
+    if (state.phase3Feeds === 1) {
+      // Drop #1: The 40-Egg Glitch
+      setTimeout(() => {
+        state.eggFace = 'OPEN';
+        state.basketCount = 40;
+        triggerTimedModal('You now have 40 eggs.', 'You now have 40 eggs.', 2500);
+      }, 750);
+    } else if (state.phase3Feeds === 2) {
+      // Drop #2: The 41st Winning Egg
+      setTimeout(() => {
+        state.eggFace = 'OPEN';
+        state.basketCount = 39;
+        showModal('41 EGGS');
+        speakLine('41 eggs. You win.');
+
+        setTimeout(() => {
+          showModal('Congrats big boy');
+          speakLine('Congrats, big boy.');
+
+          setTimeout(() => {
+            hideModal();
+            state.phase = 4;
+            state.eggFace = 'NEUTRAL';
+            state.cutsceneStart = performance.now();
+            startSlinkyBassline();
+          }, 2100);
+        }, 2300);
+      }, 750);
+    }
+  }
+}
+
+// =========================================
+// INPUT HANDLING (MOUSE & TOUCH)
+// =========================================
+function getCanvasCoords(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+function handlePointerDown(clientX, clientY) {
+  ensureAudio();
+  const pos = getCanvasCoords(clientX, clientY);
+  state.mouseX = pos.x;
+  state.mouseY = pos.y;
+  state.mouseDown = true;
+
+  if (state.inputLocked || state.phase === 4) return;
+
+  // Check if clicking near the basket pile
+  const distToBasket = Math.hypot(pos.x - basketPos.x, pos.y - (basketPos.y - 12));
+  if (distToBasket < 85) {
+    state.draggingEgg = true;
+    state.dragX = pos.x;
+    state.dragY = pos.y;
+  }
+}
+
+function handlePointerMove(clientX, clientY) {
+  const pos = getCanvasCoords(clientX, clientY);
+  state.mouseX = pos.x;
+  state.mouseY = pos.y;
+
+  if (state.draggingEgg && !state.inputLocked) {
+    state.dragX = pos.x;
+    state.dragY = pos.y;
+
+    // Batch 4 trigger: halfway across screen triggers Phase 2 immediately
+    if (state.phase === 1 && state.batchIndex === 3 && state.dragX < 520) {
+      triggerOutOfEggsSequence();
+    }
+  }
+}
+
+function handlePointerUp() {
+  state.mouseDown = false;
+  if (!state.draggingEgg || state.inputLocked) return;
+
+  state.draggingEgg = false;
+  // Mouth hit detection (Egg mouth center is around eggX, eggY - 6)
+  const mouthX = state.eggX;
+  const mouthY = state.eggY - 6;
+  const distToMouth = Math.hypot(state.dragX - mouthX, state.dragY - mouthY);
+
+  if (distToMouth < 55) {
+    handleMouthFeed();
+  }
+}
+
+// Mouse Listeners
+canvas.addEventListener('mousedown', (e) => handlePointerDown(e.clientX, e.clientY));
+window.addEventListener('mousemove', (e) => handlePointerMove(e.clientX, e.clientY));
+window.addEventListener('mouseup', () => handlePointerUp());
+
+// Touch Listeners
+canvas.addEventListener('touchstart', (e) => {
+  if (e.touches.length > 0) {
+    e.preventDefault();
+    handlePointerDown(e.touches[0].clientX, e.touches[0].clientY);
+  }
+}, { passive: false });
+
+window.addEventListener('touchmove', (e) => {
+  if (e.touches.length > 0) {
+    handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+  }
+}, { passive: false });
+
+window.addEventListener('touchend', () => handlePointerUp());
+
+// =========================================
+// PROCEDURAL CANVAS DRAWING (MONOCHROME #b8ccd8)
+// =========================================
+function drawMacTitleBar() {
+  // 28px tall top bar with alternating white and 2px black horizontal pinstripes
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, 28);
+  ctx.fillStyle = '#000000';
+  const stripeYs = [4, 8, 12, 16, 20];
+  for (let i = 0; i < stripeYs.length; i++) {
+    ctx.fillRect(0, stripeYs[i], canvas.width, 2);
+  }
+  ctx.fillRect(0, 26, canvas.width, 2);
+}
+
+function drawSmallEgg(x, y, rot = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rot);
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 14, 18, 0, 0, Math.PI * 2);
+  ctx.fillStyle = MONO_BG;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#000000';
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawBasket() {
+  const { x, y } = basketPos;
+
+  // 1. Pile of ~10 visible small monochrome oval eggs inside basket
+  for (const offset of basketEggsOffsets) {
+    drawSmallEgg(x + offset.dx, y + offset.dy, offset.rot);
+  }
+
+  // 2. Monochrome upper rim with zig-zag weave band (#b8ccd8 fill, #000000 outline)
+  ctx.fillStyle = MONO_BG;
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x - 68, y - 10);
+  ctx.lineTo(x + 68, y - 10);
+  ctx.lineTo(x + 62, y + 8);
+  ctx.lineTo(x - 62, y + 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Zig-zag weave band inside rim
+  ctx.beginPath();
+  for (let wx = x - 60; wx < x + 60; wx += 12) {
+    ctx.moveTo(wx, y - 8);
+    ctx.lineTo(wx + 6, y + 6);
+    ctx.lineTo(wx + 12, y - 8);
+  }
+  ctx.stroke();
+
+  // 3. Monochrome lower bowl with dense black pixel crosshatching/dithering
+  ctx.save();
+  ctx.fillStyle = MONO_BG;
+  ctx.beginPath();
+  ctx.moveTo(x - 58, y + 8);
+  ctx.lineTo(x + 58, y + 8);
+  ctx.quadraticCurveTo(x + 48, y + 48, x, y + 48);
+  ctx.quadraticCurveTo(x - 48, y + 48, x - 58, y + 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Clip to lower bowl to draw dense black crosshatching and pixel dithering
+  ctx.clip();
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  for (let wx = x - 70; wx <= x + 70; wx += 8) {
+    ctx.moveTo(wx, y + 6);
+    ctx.lineTo(wx - 24, y + 50);
+    ctx.moveTo(wx, y + 6);
+    ctx.lineTo(wx + 24, y + 50);
+  }
+  ctx.stroke();
+
+  // Pixel dithering dots inside weave
+  ctx.fillStyle = '#000000';
+  for (let py = y + 11; py < y + 46; py += 4) {
+    for (let px = x - 54; px < x + 54; px += 4) {
+      if (((px + py) / 4) % 2 === 0) {
+        ctx.fillRect(px, py, 2, 2);
+      }
+    }
+  }
+  ctx.restore();
+
+  // Re-stroke bowl outline cleanly
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#000000';
+  ctx.beginPath();
+  ctx.moveTo(x - 58, y + 8);
+  ctx.lineTo(x + 58, y + 8);
+  ctx.quadraticCurveTo(x + 48, y + 48, x, y + 48);
+  ctx.quadraticCurveTo(x - 48, y + 48, x - 58, y + 8);
+  ctx.closePath();
+  ctx.stroke();
+
+  // 4. Counter Label below basket (Hidden until Phase 2 refill completes)
+  if (state.basketCountVisible) {
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 22px "Courier New", monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`EGGS: ${state.basketCount}`, x, y + 78);
+  }
+}
+
+/**
+ * Draws thick, double-lined enclosed 2D cartoon legs filled with #b8ccd8
+ * and rounded feet pointing outward left and right.
+ */
+function drawThickLegsOutward(x, y) {
+  ctx.save();
+  ctx.fillStyle = MONO_BG;
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 2;
+
+  // Left thick leg & rounded foot pointing left
+  ctx.beginPath();
+  ctx.moveTo(x - 30, y + 68);
+  ctx.lineTo(x - 30, y + 98);
+  ctx.quadraticCurveTo(x - 48, y + 98, x - 48, y + 106);
+  ctx.quadraticCurveTo(x - 48, y + 112, x - 34, y + 112);
+  ctx.lineTo(x - 16, y + 112);
+  ctx.lineTo(x - 16, y + 72);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Right thick leg & rounded foot pointing right
+  ctx.beginPath();
+  ctx.moveTo(x + 30, y + 68);
+  ctx.lineTo(x + 30, y + 98);
+  ctx.quadraticCurveTo(x + 48, y + 98, x + 48, y + 106);
+  ctx.quadraticCurveTo(x + 48, y + 112, x + 34, y + 112);
+  ctx.lineTo(x + 16, y + 112);
+  ctx.lineTo(x + 16, y + 72);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/**
+ * Draws thick enclosed cartoon legs pointing right for the 90-degree side profile turn.
+ */
+function drawThickLegsSideProfile(x, y) {
+  ctx.save();
+  ctx.fillStyle = MONO_BG;
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 2;
+
+  // Back leg (slightly left)
+  ctx.beginPath();
+  ctx.moveTo(x - 14, y + 70);
+  ctx.lineTo(x - 14, y + 110);
+  ctx.lineTo(x + 12, y + 110);
+  ctx.quadraticCurveTo(x + 18, y + 110, x + 18, y + 104);
+  ctx.quadraticCurveTo(x + 18, y + 98, x + 2, y + 98);
+  ctx.lineTo(x - 2, y + 70);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Front leg (slightly right)
+  ctx.beginPath();
+  ctx.moveTo(x + 4, y + 70);
+  ctx.lineTo(x + 4, y + 112);
+  ctx.lineTo(x + 30, y + 112);
+  ctx.quadraticCurveTo(x + 36, y + 112, x + 36, y + 106);
+  ctx.quadraticCurveTo(x + 36, y + 100, x + 18, y + 100);
+  ctx.lineTo(x + 16, y + 70);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawBigEggStandard(x, y, faceState) {
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#000000';
+
+  // 1. Thick double-lined cartoon legs connected to bottom of body
+  drawThickLegsOutward(x, y);
+
+  // 2. Large vertical egg body filled with #b8ccd8
+  ctx.beginPath();
+  ctx.ellipse(x, y, 65, 82.5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = MONO_BG;
+  ctx.fill();
+  ctx.stroke();
+
+  // 3. Face states
+  if (faceState === 'CHEWING') {
+    // '>' and '<' squinting lines for eyes
+    ctx.beginPath();
+    ctx.moveTo(x - 24, y - 50);
+    ctx.lineTo(x - 12, y - 44);
+    ctx.lineTo(x - 24, y - 38);
+
+    ctx.moveTo(x + 24, y - 50);
+    ctx.lineTo(x + 12, y - 44);
+    ctx.lineTo(x + 24, y - 38);
+    ctx.stroke();
+
+    // Small wavy horizontal chewing mouth with corner crease
+    const wiggle = Math.sin(performance.now() * 0.038) * 3.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 20, y - 8 + wiggle);
+    ctx.quadraticCurveTo(x - 10, y - 15 - wiggle, x, y - 8);
+    ctx.quadraticCurveTo(x + 10, y - 1 + wiggle, x + 20, y - 9 - wiggle);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(x + 22, y - 9 - wiggle, 5, -0.8, 0.8);
+    ctx.stroke();
+  } else {
+    // Circular WHITE-filled eyes with black outlines and center pupils
+    [-16, 16].forEach(offsetX => {
+      ctx.beginPath();
+      ctx.arc(x + offsetX, y - 46, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.beginPath();
+      ctx.arc(x + offsetX, y - 46, 2, 0, Math.PI * 2);
+      ctx.fillStyle = '#000000';
+      ctx.fill();
+    });
+
+    if (faceState === 'OPEN' || faceState === 'ALERT') {
+      // Massive circular gaping mouth
+      ctx.beginPath();
+      ctx.arc(x, y - 6, 32, 0, Math.PI * 2);
+      ctx.fillStyle = faceState === 'ALERT' ? '#ff2a00' : '#000000';
+      ctx.fill();
+      ctx.stroke();
+    } else if (faceState === 'NEUTRAL') {
+      // Flat small horizontal line (—)
+      ctx.beginPath();
+      ctx.moveTo(x - 16, y - 14);
+      ctx.lineTo(x + 16, y - 14);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawBigEggCutscene(elapsedSec) {
+  const x = state.eggX;
+  const y = state.eggY;
+  ctx.save();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#000000';
+
+  // [0.0s - 1.5s] Stage 1: Neutral Slide from X=190 to X=480
+  if (elapsedSec < 1.5) {
+    const t = Math.min(1, elapsedSec / 1.5);
+    state.eggX = 190 + (480 - 190) * t;
+    drawBigEggStandard(state.eggX, y, 'NEUTRAL');
+    ctx.restore();
+    return;
+  }
+
+  state.eggX = 480;
+
+  // [1.5s - 2.4s] Stage 2A: Waistband Grab Frame
+  if (elapsedSec < 2.4) {
+    drawBigEggStandard(x, y, 'NEUTRAL');
+
+    // Horizontal waistband line across lower torso
+    ctx.beginPath();
+    ctx.moveTo(x - 58, y + 36);
+    ctx.lineTo(x + 58, y + 36);
+    ctx.stroke();
+
+    // Two cartoon hands gripping the waistband on either side
+    ctx.beginPath();
+    ctx.moveTo(x - 64, y - 6);
+    ctx.quadraticCurveTo(x - 76, y + 18, x - 56, y + 36);
+    ctx.moveTo(x + 64, y - 6);
+    ctx.quadraticCurveTo(x + 76, y + 18, x + 56, y + 36);
+    ctx.stroke();
+
+    // Small round cartoon hands on the waistband
+    ctx.fillStyle = MONO_BG;
+    ctx.beginPath();
+    ctx.arc(x - 54, y + 36, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x + 54, y + 36, 6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.restore();
+    return;
+  }
+
+  // [2.4s - 4.5s] Stage 2B: Underwear Pulled Down (The Bush)
+  if (elapsedSec < 4.5) {
+    drawBigEggStandard(x, y, 'NEUTRAL');
+
+    // Vertical groin cleft line extending down between legs
+    ctx.beginPath();
+    ctx.moveTo(x, y + 66);
+    ctx.lineTo(x, y + 82);
+    ctx.stroke();
+
+    // Arms reaching down to ankles
+    ctx.beginPath();
+    ctx.moveTo(x - 63, y - 10);
+    ctx.quadraticCurveTo(x - 78, y + 40, x - 34, y + 92);
+    ctx.moveTo(x + 63, y - 10);
+    ctx.quadraticCurveTo(x + 78, y + 40, x + 34, y + 92);
+    ctx.stroke();
+
+    // Monochrome (#b8ccd8) underwear/briefs pulled down around ankles
+    ctx.fillStyle = MONO_BG;
+    ctx.fillRect(x - 36, y + 88, 72, 12);
+    ctx.strokeRect(x - 36, y + 88, 72, 12);
+
+    // Triangular patch of dense black pixels with jagged hairs sticking out
+    ctx.fillStyle = '#000000';
+    const bushPixels = [
+      [-12,56],[-8,56],[-4,56],[0,56],[4,56],[8,56],[12,56],
+      [-10,60],[-6,60],[-2,60],[2,60],[6,60],[10,60],
+      [-8,64],[-4,64],[0,64],[4,64],[8,64],
+      [-5,68],[0,68],[5,68],
+      [-2,72],[2,72],[0,75]
+    ];
+    bushPixels.forEach(([px, py]) => {
+      ctx.fillRect(x + px - 2, y + py - 2, 4, 4);
+    });
+
+    // Jagged stray pubic hairs sticking out around the bush
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y + 56); ctx.lineTo(x - 17, y + 52);
+    ctx.moveTo(x - 6, y + 55);  ctx.lineTo(x - 8, y + 49);
+    ctx.moveTo(x, y + 55);      ctx.lineTo(x + 1, y + 48);
+    ctx.moveTo(x + 6, y + 55);  ctx.lineTo(x + 9, y + 50);
+    ctx.moveTo(x + 12, y + 56); ctx.lineTo(x + 17, y + 53);
+    ctx.moveTo(x - 10, y + 62); ctx.lineTo(x - 16, y + 63);
+    ctx.moveTo(x + 10, y + 62); ctx.lineTo(x + 16, y + 63);
+    ctx.stroke();
+
+    ctx.restore();
+    return;
+  }
+
+  // [4.5s - 6.0s] Stage 3: Underwear pulled back up, arms at sides
+  if (elapsedSec < 6.0) {
+    drawBigEggStandard(x, y, 'NEUTRAL');
+    ctx.beginPath();
+    ctx.moveTo(x - 64, y - 10);
+    ctx.lineTo(x - 70, y + 36);
+    ctx.moveTo(x + 64, y - 10);
+    ctx.lineTo(x + 70, y + 36);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // [6.0s - 6.8s] Stage 4A: Turned 90 degrees right (side profile with thick legs)
+  if (elapsedSec < 6.8) {
+    drawThickLegsSideProfile(x, y);
+
+    // Side profile body filled with #b8ccd8
+    ctx.beginPath();
+    ctx.ellipse(x, y, 54, 82.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = MONO_BG;
+    ctx.fill();
+    ctx.stroke();
+
+    // Side arm
+    ctx.beginPath();
+    ctx.moveTo(x, y - 4);
+    ctx.lineTo(x, y + 38);
+    ctx.stroke();
+
+    // One white-filled eye visible on right side
+    ctx.beginPath();
+    ctx.arc(x + 28, y - 46, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x + 30, y - 46, 2, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+
+    // Flat mouth on right edge
+    ctx.beginPath();
+    ctx.moveTo(x + 36, y - 14);
+    ctx.lineTo(x + 52, y - 14);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // [6.8s - 7.5s] Stage 4B: Facing completely away (back view, plain #b8ccd8 oval & thick legs)
+  if (elapsedSec < 7.5) {
+    drawThickLegsOutward(x, y);
+
+    ctx.beginPath();
+    ctx.ellipse(x, y, 65, 82.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = MONO_BG;
+    ctx.fill();
+    ctx.stroke();
+
+    // Arms at sides
+    ctx.beginPath();
+    ctx.moveTo(x - 64, y - 10);
+    ctx.lineTo(x - 70, y + 36);
+    ctx.moveTo(x + 64, y - 10);
+    ctx.lineTo(x + 70, y + 36);
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
+
+  // [7.5s - 9.0s] Stage 5: Hands pull underwear down from behind to ankles, revealing butt cheeks
+  if (elapsedSec < 9.0) {
+    drawThickLegsOutward(x, y);
+
+    // Body
+    ctx.beginPath();
+    ctx.ellipse(x, y, 65, 82.5, 0, 0, Math.PI * 2);
+    ctx.fillStyle = MONO_BG;
+    ctx.fill();
+    ctx.stroke();
+
+    // Arms pulling underwear down to ankles
+    ctx.beginPath();
+    ctx.moveTo(x - 63, y - 10);
+    ctx.quadraticCurveTo(x - 76, y + 40, x - 34, y + 90);
+    ctx.moveTo(x + 63, y - 10);
+    ctx.quadraticCurveTo(x + 76, y + 40, x + 34, y + 90);
+    ctx.stroke();
+
+    // Two rounded cartoon butt cheeks with center vertical cleft and curved bottom creases
+    ctx.beginPath();
+    ctx.moveTo(x, y + 24);
+    ctx.lineTo(x, y + 75);
+    ctx.moveTo(x - 38, y + 58);
+    ctx.quadraticCurveTo(x - 18, y + 82, x, y + 72);
+    ctx.moveTo(x + 38, y + 58);
+    ctx.quadraticCurveTo(x + 18, y + 82, x, y + 72);
+    ctx.stroke();
+
+    // Monochrome (#b8ccd8) underwear at ankles
+    ctx.fillStyle = MONO_BG;
+    ctx.fillRect(x - 36, y + 88, 72, 12);
+    ctx.strokeRect(x - 36, y + 88, 72, 12);
+    ctx.restore();
+    return;
+  }
+
+  // [9.0s onwards] Stage 6: Accurate Bent-Over Pose
+  // 1. Thick legs & outward feet at bottom
+  drawThickLegsOutward(x, y);
+
+  // 2. Monochrome (#b8ccd8) bunched underwear around ankles
+  ctx.fillStyle = MONO_BG;
+  ctx.fillRect(x - 38, y + 88, 76, 12);
+  ctx.strokeRect(x - 38, y + 88, 76, 12);
+
+  // 3. Upside-down peeking head between the legs right above the underwear band
+  ctx.beginPath();
+  ctx.ellipse(x, y + 52, 26, 26, 0, 0, Math.PI);
+  ctx.fillStyle = MONO_BG;
+  ctx.fill();
+  ctx.stroke();
+
+  // Two white-filled circular eyes with black pupils (at the bottom of the upside-down head)
+  [-9, 9].forEach(ox => {
+    ctx.beginPath();
+    ctx.arc(x + ox, y + 68, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(x + ox, y + 68, 1.8, 0, Math.PI * 2);
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+  });
+
+  // Upside-down rectangular open grimacing mouth with vertical teeth lines inside
+  ctx.fillStyle = MONO_BG;
+  ctx.fillRect(x - 12, y + 53, 24, 9);
+  ctx.strokeRect(x - 12, y + 53, 24, 9);
+  ctx.beginPath();
+  // Horizontal clench line & vertical teeth dividers
+  ctx.moveTo(x - 12, y + 57.5); ctx.lineTo(x + 12, y + 57.5);
+  ctx.moveTo(x - 6, y + 53);    ctx.lineTo(x - 6, y + 62);
+  ctx.moveTo(x, y + 53);        ctx.lineTo(x, y + 62);
+  ctx.moveTo(x + 6, y + 53);    ctx.lineTo(x + 6, y + 62);
+  ctx.stroke();
+
+  // 4. Wide, heart-shaped pair of bent-over butt cheeks at the top (#b8ccd8 fill)
+  ctx.beginPath();
+  ctx.moveTo(x, y - 24);
+  ctx.bezierCurveTo(x - 36, y - 52, x - 78, y - 16, x - 66, y + 32);
+  ctx.quadraticCurveTo(x - 52, y + 58, x, y + 48);
+  ctx.quadraticCurveTo(x + 52, y + 58, x + 66, y + 32);
+  ctx.bezierCurveTo(x + 78, y - 16, x + 36, y - 52, x, y - 24);
+  ctx.closePath();
+  ctx.fillStyle = MONO_BG;
+  ctx.fill();
+  ctx.stroke();
+
+  // 5. Vertical crease line at the top cleft & bottom cleft
+  ctx.beginPath();
+  ctx.moveTo(x, y - 24);
+  ctx.lineTo(x, y - 4);
+  ctx.moveTo(x, y + 26);
+  ctx.lineTo(x, y + 48);
+  ctx.stroke();
+
+  // 6. Distinct 5-line radiating star/asterisk (* shape around center dot) for the butthole
+  const bhY = y + 11;
+  ctx.fillStyle = '#000000';
+  ctx.beginPath();
+  ctx.arc(x, bhY, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 5 radiating star ticks
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < 5; i++) {
+    const angle = -Math.PI / 2 + (i * 2 * Math.PI) / 5;
+    ctx.moveTo(x + Math.cos(angle) * 3, bhY + Math.sin(angle) * 3);
+    ctx.lineTo(x + Math.cos(angle) * 9, bhY + Math.sin(angle) * 9);
+  }
+  ctx.stroke();
+
+  // 7. Arms reaching down to grip the sides of ankles/underwear
+  ctx.beginPath();
+  ctx.moveTo(x - 63, y + 18);
+  ctx.quadraticCurveTo(x - 58, y + 58, x - 38, y + 90);
+  ctx.moveTo(x + 63, y + 18);
+  ctx.quadraticCurveTo(x + 58, y + 58, x + 38, y + 90);
+  ctx.stroke();
+
+  // Hands gripping the sides of the ankles
+  ctx.fillStyle = MONO_BG;
+  ctx.beginPath();
+  ctx.arc(x - 38, y + 90, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(x + 38, y + 90, 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.restore();
+
+  // At 10.0s, pop up flat modal at top: 24% reading "You're looking at a nude egg."
+  if (elapsedSec >= 10.0 && !state.finalModalShown) {
+    state.finalModalShown = true;
+    showModal("You're looking<br>at a nude egg.", '24%');
+    speakLine("You're looking at a nude egg.");
+  }
+}
+
+/**
+ * Draws the monochrome (#b8ccd8) gloved hand cursor:
+ * - When idle (!isGrabbing): Open 4-fingered cartoon hand pointing UP.
+ * - When dragging an egg (isGrabbing): Oriented horizontally pointing LEFT,
+ *   positioned on the right edge of the dragged egg so its fingers wrap around
+ *   the right side of the egg as it carries it left toward the mouth.
+ */
+function drawGlovedCursor(x, y, isGrabbing) {
+  ctx.save();
+  ctx.fillStyle = MONO_BG;
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 2;
+
+  if (isGrabbing) {
+    // Positioned on the right edge of the egg, pointing LEFT
+    ctx.translate(Math.round(x + 14), Math.round(y));
+
+    // Rounded palm on the right side
+    ctx.beginPath();
+    ctx.rect(0, -11, 18, 22);
+    ctx.fill();
+    ctx.stroke();
+
+    // 4 horizontal fingers wrapping left around the right edge of the egg
+    const fingerYs = [-11, -5, 1, 7];
+    for (let i = 0; i < fingerYs.length; i++) {
+      ctx.beginPath();
+      ctx.rect(-10, fingerYs[i], 12, 5);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    // Thumb hooking up from the top-left
+    ctx.beginPath();
+    ctx.rect(-4, -17, 10, 6);
+    ctx.fill();
+    ctx.stroke();
+  } else {
+    // Open 4-fingered cartoon hand pointing UP
+    ctx.translate(Math.round(x), Math.round(y));
+
+    // Palm
+    ctx.beginPath();
+    ctx.rect(-10, 0, 22, 16);
+    ctx.fill();
+    ctx.stroke();
+
+    // Thumb sticking out to the left
+    ctx.beginPath();
+    ctx.rect(-17, 2, 8, 7);
+    ctx.fill();
+    ctx.stroke();
+
+    // 4 vertical fingers pointing up
+    const fingerXs = [-10, -4, 2, 8];
+    const fingerHeights = [14, 17, 16, 12];
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.rect(fingerXs[i], -fingerHeights[i], 5, fingerHeights[i]);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+// =========================================
+// MAIN GAME LOOP
+// =========================================
+function gameLoop(now) {
+  // Return Big Egg from CHEWING to OPEN after 750ms
+  if (state.eggFace === 'CHEWING' && now > state.chewTimer) {
+    state.eggFace = 'OPEN';
+  }
+
+  // 1. Main Background (#b8ccd8 or #00bce4 flash)
+  ctx.fillStyle = state.bgColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 2. Retro Mac-style striped top title bar
+  drawMacTitleBar();
+
+  // 3. Game Title ("FEED EGGS" at Y=65, 24px bold uppercase bitmap font)
+  ctx.fillStyle = '#000000';
+  ctx.font = 'bold 24px "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('FEED EGGS', canvas.width / 2, 65);
+
+  // 4. Monochrome Basket on Right (X=780, Y=390)
+  drawBasket();
+
+  // 5. Big Egg (Left X=190, Y=355 or Cutscene in Phase 4)
+  if (state.phase < 4) {
+    drawBigEggStandard(state.eggX, state.eggY, state.eggFace);
+  } else {
+    const elapsedSec = (now - state.cutsceneStart) / 1000;
+    drawBigEggCutscene(elapsedSec);
+  }
+
+  // 6. Frozen mid-air small egg during Phase 2A warning flash
+  if (state.frozenMidAirEgg) {
+    drawSmallEgg(state.frozenMidAirEgg.x, state.frozenMidAirEgg.y);
+  }
+
+  // 7. Currently dragged small egg
+  if (state.draggingEgg) {
+    drawSmallEgg(state.dragX, state.dragY);
+  }
+
+  // 8. Custom pixelated gloved hand cursor
+  drawGlovedCursor(state.mouseX, state.mouseY, state.draggingEgg);
+
+  requestAnimationFrame(gameLoop);
+}
+
+window.onload = function () {
+  requestAnimationFrame(gameLoop);
+};
+</script>
+</body>
+</html>
